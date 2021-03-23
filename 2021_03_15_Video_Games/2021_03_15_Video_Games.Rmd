@@ -1,0 +1,226 @@
+---
+title: "2021_03_15_Video_Games"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(httr)
+library(lubridate)
+library(jsonlite)
+options(scipen = 999)
+```
+
+## Video Games (TidyTuesday 2021_03_15)
+
+### Data Dictionary (games.csv)
+
+| variable        | class           | description  |
+| ------------- |:-------------:| -----:|
+gamename |	character |	Name of video games
+year |	double	 | Year of measureo
+month |	character |	Month of measure
+avg	 | double |	Average number of players at the same time
+gain |	double |	Gain (or loss) Difference in average compared to the previous month (NA = 1st month)
+peak |	double |	Highest number of players at the same time
+avg_peak_perc |	character	 |Share of the average in the maximum value (avg / peak) in %
+
+
+### Read-in the Data
+```{r}
+# Or read in the data manually
+games <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-03-16/games.csv', 
+                        col_types = cols(year=col_character(), 
+                                         avg_peak_perc=col_number()))
+spec(games)
+problems(games)
+games[41807,]
+```
+
+## Understand the Data
+
+What are the top 10 games by avg player count in the dataset?
+```{r}
+games %>% group_by(gamename) %>% filter(avg == max(avg)) %>% arrange(desc(avg)) %>% ungroup() %>% slice(1:25)
+```
+
+# Question of Interest
+Can we predict initial player counts for new games?
+
+Some Assumptions:
+- Games might release at any point in a month.
+- Assumption: Let's use the max values for the first 3 months to account for any low initial counts due to releasing at the end of a month, etc.
+
+
+# Fun with dates!
+```{r}
+# Add a date column using lubridate
+games <- games %>% mutate(date = mdy(str_c(month,"-01-",year)))
+games
+
+# Make some assumptions...
+# Cut off 2012 games and 2021 games as those may not be complete
+games <- games %>% filter(!(year %in% c('2012','2021')))
+games
+
+# Find Initial Releases
+initial_release <- games %>% filter(is.na(gain) == T)  %>% select(gamename, date) %>% mutate(date_end = date + months(3))
+initial_release
+
+# Join Initial Releases back to games where gamename == gamename and initial_release$date is >= date and date + 3 months
+install.packages('sqldf')
+library(sqldf)
+
+initial_release_3m_df <- sqldf("SELECT * FROM initial_release
+            LEFT JOIN games
+            ON  initial_release.gamename  = games.gamename
+            AND games.date BETWEEN initial_release.date AND initial_release.date_end")
+initial_release_3m_df
+
+# Remove some dup columns
+initial_release_3m_df <- initial_release_3m_df %>% select(1:3, 5:9)
+initial_release_3m_df
+
+# Ensure we only have one row per game
+initial_release_3m_df <- initial_release_3m_df %>% group_by(gamename) %>% summarise(max_3m_avg = max(avg), max_3m_peak = max(peak), release_year = min(year), release_month = min(month) ) 
+
+initial_release_3m_df %>% arrange(desc(max_3m_avg))
+```
+
+# Histogram of all initial releases from 2013 to 2021 with at least 1 player
+games %>% filter(is.na(gain) == T, avg >= 1)  %>% ggplot(aes(x=avg)) + geom_histogram(binwidth=1000)
+initial_release_3m_df %>% ggplot(aes(x=max_3m_avg)) + geom_histogram(binwidth=100)
+initial_release_3m_df %>% filter(max_3m_avg >= 100, max_3m_avg < 1000) %>% ggplot(aes(x=max_3m_avg)) + geom_histogram(binwidth=100)
+
+# Distribution
+games %>% filter(is.na(gain) == T, avg >= 1)  %>% ggplot(aes(x=factor(month, month.name), y=avg)) + geom_boxplot()
+```
+
+## Augment the Data with the IGDB Rest API
+
+Capture Data from igdb Rest API
+https://www.igdb.com/advanced_search
+
+## Get Access Token from Twitch so we can use the IGDB API
+```{r}
+
+twitch_client_id = 'x3vdptwoaut0p9kq5k2x0my7n2v2j3'
+twitch_secret_key = 'orlgkwfb2ybdus0984wyawx6jnx95i'
+
+# Get API Access token
+
+# POST(
+#   url = NULL,
+#   config = list(),
+#   ...,
+#   body = NULL,
+#   encode = c("multipart", "form", "json", "raw"),
+#   handle = NULL
+# )
+
+# Make a post request to get oauth access token
+url = str_c("https://id.twitch.tv/oauth2/token?client_id=", twitch_client_id, "&client_secret=", twitch_secret_key,"&grant_type=client_credentials", sep="")
+r = POST(url = url)
+# What we got back
+str(content(r))
+
+# What we need
+access_token = content(r)$access_token
+```
+
+## Example IGDB API to get all the fields of metadata about a game
+All calls to the IGDB are posts.  
+- The URL is the endpoint, we will work mainly with *games*.
+- The header needs the Client-ID from twitch and our Access Token.
+- The body is raw text and contains their propritary sql like query language.
+
+https://api-docs.igdb.com/#examples
+
+```{r}
+url = "https://api.igdb.com/v4/games"
+
+# Client-ID: abcdefg12345
+# Authorization: Bearer prau3ol6mg5glgek8m89ec2s9q5i3i
+# fields *;
+
+body = 'fields *;'
+
+# add headers needs a named character vector
+bearer_token = str_c("Bearer ", access_token, sep="")
+header_named_vector = c("Client-ID" = twitch_client_id, "Authorization" = bearer_token)
+header_named_vector
+
+r_games = POST(url, add_headers(header_named_vector), body = body, encode = "raw")
+
+str(content(r_games))
+```
+
+Create a function to get the meta data for a single game
+```{r}
+
+lookup_game_metadata <- function(game_name, access_token) {
+  url = "https://api.igdb.com/v4/games"
+  header = c("Client-ID" = twitch_client_id, "Authorization" = bearer_token)
+  body = str_c("fields name,rating,rating_count,follows; where name = \"", game_name, "\";", sep ="")
+  
+  Sys.sleep(0.26) #sleep .26 second so we do not get rate limited (max is 4 requests per second)
+  return(content(POST(url, add_headers(header_named_vector), body = body, encode = "raw")))
+}
+```
+
+# Test it
+```{r}
+lookup_game_metadata("Rust", access_token)
+```
+
+# Get the data for 10 random games
+```{r}
+sample_games <- games %>% sample_n(10)
+sample_games
+l <- sapply(sample_games$gamename, lookup_game_metadata, access_token=access_token)
+
+
+df <- data.frame(matrix(ncol = 5, nrow = 0))
+for(e in l) {
+  for(g in e) {
+   df <- rbind(df, c(g$id, g$name, g$rating, g$rating_count, g$follows)) 
+  }
+}
+
+colnames(df) <- c("id", "name", "rating", "rating_count", "follows")
+df <- as_tibble(df)
+df
+```
+
+# Combine our Dataframes
+
+# H2o.ai
+Install H2o.ai for R  
+```{r}
+# The following two commands remove any previously installed H2O packages for R.
+if ("package:h2o" %in% search()) { detach("package:h2o", unload=TRUE) }
+if ("h2o" %in% rownames(installed.packages())) { remove.packages("h2o") }
+
+# Next, we download packages that H2O depends on.
+pkgs <- c("RCurl","jsonlite")
+for (pkg in pkgs) {
+  if (! (pkg %in% rownames(installed.packages()))) { install.packages(pkg) }
+}
+
+# Now we download, install and initialize the H2O package for R.
+install.packages("h2o", type="source", repos="http://h2o-release.s3.amazonaws.com/h2o/rel-zermelo/4/R")
+
+# Finally, let's load H2O and start up an H2O cluster
+library(h2o)
+h2o.init()
+
+```
+
+## Use H2o.ai
+```{r}
+
+```
+
+
+
