@@ -35,8 +35,7 @@ games <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidy
                         col_types = cols(year=col_character(), 
                                          avg_peak_perc=col_number()))
 spec(games)
-problems(games)
-games[41807,]
+problems(games) # these problems are okay, as we want NULLs in this case.
 ```
 
 ## Understand the Data
@@ -47,23 +46,39 @@ games %>% group_by(gamename) %>% filter(avg == max(avg)) %>% arrange(desc(avg)) 
 ```
 
 # Question of Interest
-Can we predict initial player counts for new games?
+Can we somehow predict initial player counts for new games?
 
 Some Assumptions:
-- Games might release at any point in a month.
-- Assumption: Let's use the max values for the first 3 months to account for any low initial counts due to releasing at the end of a month, etc.
+- We will optimistically define "Initial Player Count" is the max player count in the first 3 of a games release.
 
 
-# Fun with dates!
+# Turn our Month and Year into a DateTime object so we can do date math.
 ```{r}
-# Add a date column using lubridate
+# Create our "date" column with lubridate
 games <- games %>% mutate(date = mdy(str_c(month,"-01-",year)))
 games
 
+
+```
+
+# Clean the gamename and get the unique list of games.
+```{r}
+unique_games <- unique(iconv(str_to_title(games$gamename), "latin1", "ASCII", sub=""))
+sample(unique_games,10)
+
+# Probably we need to remove the pattern " [-:] <Word> Edition" from the end of strings (or ": Game Of The year")
+```
+
+# Lookup
+```{r}
+
+
+```{r}
 # Make some assumptions...
 # Cut off 2012 games and 2021 games as those may not be complete
 games <- games %>% filter(!(year %in% c('2012','2021')))
 games
+
 
 # Find Initial Releases
 initial_release <- games %>% filter(is.na(gain) == T)  %>% select(gamename, date) %>% mutate(date_end = date + months(3))
@@ -107,7 +122,7 @@ https://www.igdb.com/advanced_search
 ```{r}
 
 twitch_client_id = 'x3vdptwoaut0p9kq5k2x0my7n2v2j3'
-twitch_secret_key = 'orlgkwfb2ybdus0984wyawx6jnx95i'
+twitch_secret_key = ''
 
 # Get API Access token
 
