@@ -1,0 +1,93 @@
+---
+title: "2021_03_15_Video_Games"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+library("janitor")
+library("DataExplorer")
+options(scipen = 999)
+```
+
+## Water Access Points (TidyTuesday 2021_05_04)
+
+### Read-in the Data
+```{r}
+
+raw_df <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-05-04/water.csv')
+ethiopia <- raw_df %>% filter(country_name == "Ethiopia")
+
+DataExplorer::create_report(ethiopia)
+```
+
+```{r}
+library(sp)
+library(raster)
+library(rgdal)
+library(leaflet)
+```
+
+```{r}
+plot(ethiopia$lon_deg, ethiopia$lat_deg, ylab = "Latitude", xlab="Longitude") #boring!
+```
+
+```{r}
+ethiopia_SPDF <- SpatialPointsDataFrame(coords = ethiopia[,c("lon_deg", "lat_deg")],
+                                      data = ethiopia[,names(ethiopia)[4:13]],
+                                      proj4string = CRS("+init=epsg:4326")) # sets the projection to WGS 1984 using lat/long. Optional but good to specify
+
+# Summary of object
+ethiopia_SPDF
+
+head(ethiopia_SPDF@coords)
+plot(ethiopia_SPDF)
+```
+
+```{r}
+ETH_Adm_1 <- readOGR(dsn=path.expand("~/Documents/ND-Data-Science/tidy_tuesday/2021_05_04_WATER_ACCESS_POINTS/ETH_Adm1_shapefile/"), "ETH_Adm_1")
+ETH_Adm_1 <- raster::getData("GADM", country="ETH", level=1) 
+plot(ETH_Adm_1)
+```
+
+```{r}
+plot(ETH_Adm_1)
+points(ethiopia$lon_deg, ethiopia$lat_deg,
+     ylab = "Latitude", xlab="Longitude",
+     col="black")
+```
+```{r}
+elev <- raster("https://github.com/HughSt/HughSt.github.io/raw/master/course_materials/week1/Lab_files/Data/elev_ETH.tif")
+elev <- raster::getData("alt", country="ETH")
+elev
+plot(elev)
+```
+```{r}
+basemap <- leaflet() %>% addProviderTiles("CartoDB.Positron")
+basemap %>% addPolygons(data=ETH_Adm_1)
+```
+
+```{r}
+basemap <- leaflet() %>% addProviderTiles("CartoDB.Positron")
+#basemap %>% addRasterImage(elev)
+
+# Define palette
+raster_colorPal <- colorNumeric(topo.colors(64), values(elev), na.color = NA)
+
+# Plot
+basemap %>% addRasterImage(elev, color = raster_colorPal) %>%
+addLegend(values = values(elev), pal = raster_colorPal) %>% addCircleMarkers(data=ethiopia_SPDF,
+                   radius = 2,
+                   color = "black",
+                   popup = paste("<p>","Water Tech:",
+                                 ethiopia_SPDF$water_tech,
+                                 "<p>"))
+```
+
+```{r}
+
+```
+

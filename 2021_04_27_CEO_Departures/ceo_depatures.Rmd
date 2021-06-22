@@ -1,0 +1,54 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+# Get the Data
+
+# Read in with tidytuesdayR package 
+# Install from CRAN via: install.packages("tidytuesdayR")
+# This loads the readme and all the datasets for the week of interest
+
+# Either ISO-8601 date or year/week works!
+
+tuesdata <- tidytuesdayR::tt_load('2021-04-27')
+tuesdata <- tidytuesdayR::tt_load(2021, week = 18)
+
+departures.csv <- tuesdata$departures.csv
+
+# Or read in the data manually
+
+departures <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-27/departures.csv')
+departures
+```
+
+```{r}
+library(tidytext)
+library(tidyverse)
+get_sentiments("nrc")
+
+library(dplyr)
+library(stringr)
+
+
+bigrams <- departures %>% dplyr::group_by(ceo_dismissal) %>%  unnest_tokens(bigram, notes, token = "ngrams", n = 2)
+bigrams_separated
+
+bigrams_separated <- tidy_text %>% count(bigram, sort = TRUE)
+
+bigrams_separated %>%
+  filter(word1 == "not") %>%
+  count(word1, word2, sort = TRUE)
+
+nrc <- get_sentiments("nrc")
+
+tidy_text %>% count(word) %>%
+  inner_join(nrc) %>% filter(sentiment == "fear") %>% arrange(desc(n))
+```

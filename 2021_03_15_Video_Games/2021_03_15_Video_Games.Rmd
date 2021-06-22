@@ -10,6 +10,7 @@ library(httr)
 library(lubridate)
 library(jsonlite)
 library("janitor")
+library("SmartEDA")
 options(scipen = 999)
 ```
 
@@ -46,42 +47,157 @@ games %>% group_by(gamename) %>% filter(avg == max(avg)) %>% arrange(desc(avg)) 
 ```
 
 # Question of Interest
-Can we somehow predict initial player counts for new games?
+Can we predict initial player counts for new games?
 
 Some Assumptions:
 - We will optimistically define "Initial Player Count" is the max player count in the first 3 of a games release.
 
+# Data Cleanup & EDA
 
-# Turn our Month and Year into a DateTime object so we can do date math.
+## Turn our Month and Year into a DateTime object so we can do date math.
 ```{r}
 # Create our "date" column with lubridate
 games <- games %>% mutate(date = mdy(str_c(month,"-01-",year)))
 games
-
-
 ```
 
-# Clean the gamename and get the unique list of games.
+## Clean the gamename field get
 ```{r}
-unique_games <- unique(iconv(str_to_title(games$gamename), "latin1", "ASCII", sub=""))
-sample(unique_games,10)
-
-# Probably we need to remove the pattern " [-:] <Word> Edition" from the end of strings (or ": Game Of The year")
+games$gamename <- iconv(str_to_title(games$gamename), "latin1", "ASCII", sub="") # Probably we need to remove the pattern " [-:] <Word> Edition" from the end of strings (or ": Game Of The year")
 ```
 
-# Lookup
+## Use SmartEDA to help us wth the EDA.
+
+### Explore the data
+```{r}
+ExpData(games, type=1)
+```
+```{r}
+ExpData(games, type=2)
+```
+
+### Summary Stats for numeric variables
+
+All numeric variables
+```{r}
+ExpNumStat(games,by ="A",Outlier=TRUE,round= 2)
+```
+
+```{r}
+ExpNumStat(games,by ="GA", gp="year", Outlier=TRUE,round= 2)
+```
+
+# IGDB API - Get more data bout the games, including the release date.
+## Step 1: Authenticate with Twitch so I can use the IGDB API
 ```{r}
 
+twitch_client_id = 'x3vdptwoaut0p9kq5k2x0my7n2v2j3'
+twitch_secret_key = 'lfp5jyakl9yy2l1jw089txn505vbgz'
 
+# Get API Access token
+
+# POST(
+#   url = NULL,
+#   config = list(),
+#   ...,
+#   body = NULL,
+#   encode = c("multipart", "form", "json", "raw"),
+#   handle = NULL
+# )
+
+# Make a post request to get oauth access token
+url = str_c("https://id.twitch.tv/oauth2/token?client_id=", twitch_client_id, "&client_secret=", twitch_secret_key,"&grant_type=client_credentials", sep="")
+r = POST(url = url)
+# What we got back
+str(content(r))
+
+# What we need
+access_token = content(r)$access_token
+```
+
+## Step 2: Understand what we get back from the API
 ```{r}
-# Make some assumptions...
-# Cut off 2012 games and 2021 games as those may not be complete
-games <- games %>% filter(!(year %in% c('2012','2021')))
+url = "https://api.igdb.com/v4/games"
+
+body = 'fields *; where name = \"Football Manager 2021\";'
+
+# add headers needs a named character vector
+bearer_token = str_c("Bearer ", access_token, sep="")
+header_named_vector = c("Client-ID" = twitch_client_id, "Authorization" = bearer_token)
+header_named_vector
+
+r_games = POST(url, add_headers(header_named_vector), body = body, encode = "raw")
+
+str(content(r_games))
+```
+
+
+## Step #3: Create a function to call our "games" endpoint and bring back the data we want for a game.
+# Jan 1st, 2014 == 1388552400 in milliseconds
+```{r}
+
+lookup_game_metadata <- function(game_name, access_token) {
+  url = "https://api.igdb.com/v4/games"
+  header = c("Client-ID" = twitch_client_id, "Authorization" = bearer_token)
+  body = str_c("fields name,first_release_date,rating,rating_count,aggregated_rating,aggregated_rating_count,follows; where name = \"", game_name, "\" & first_release_date > 1388552400;", sep ="")
+  
+  Sys.sleep(0.26) #sleep .26 second so we do not get rate limited (max is 4 requests per second)
+  return(content(POST(url, add_headers(header_named_vector), body = body, encode = "raw")))
+}
+```
+
+## Step 4: Test our function
+```{r}
+lookup_game_metadata("Football Manager 2021", access_token)
+```
+
+Keep only 2013-2020 data and add an End Date
+```{r}
+# 1) Cut off 2012 games and 2021 games as those may not be complete
+# 2) Add a date_end column.
+games <- games %>% filter(!(year %in% c('2012','2021'))) %>% mutate(date_end = date + months(3))
 games
+```
 
 
+Get the unique list of games
+```{r}
+unique_games <-unique(games$gamename)
+```
+
+For each unique game, find the initial release date and ratings.
+- This takes about 5 minutes as we are running about 1200 api calls.
+```{r}
+l <- sapply(unique_games, lookup_game_metadata, access_token=access_token)
+
+df <- data.frame(matrix(ncol = 8, nrow = 0))
+#fields name,first_release_date,rating,rating_count,aggregated_rating,aggregated_rating_count,follows
+colnames(df) <- c("id", "name", "first_release_date", "rating", "rating_count", "aggregated_rating", "aggregated_rating_count", "follows")
+
+for(e in l) {
+  for(g in e) {
+    id <- g$id
+    name <- g$name
+    first_release_date <- if(length(g$first_release_date) == 0) NA else g$first_release_date
+    rating <- if(length(g$rating) == 0) { if(length(g$aggregated_rating) == 0) NA else g$aggregated_rating  } else g$rating
+    rating_count <- if(length(g$rating_count) == 0) { if(length(g$aggregated_rating_count) == 0) NA else g$aggregated_rating_count  } else g$rating
+    follows <- if(length(g$follows) == 0) -1 else g$follows
+    df <- rbind(df, c(id, name, first_release_date, rating, rating_count, follows))
+  }
+}
+
+adf <- as_tibble(df)
+names(adf) <- c("id", "name", "first_release_date", "rating", "rating_count", "follows")
+adf <- adf %>% mutate(first_release_date = as_datetime(as.numeric(first_release_date), origin = "1970-01-01",tz = "GMT"))
+adf
+
+
+```
+
+Join 
+``` {r}
 # Find Initial Releases
-initial_release <- games %>% filter(is.na(gain) == T)  %>% select(gamename, date) %>% mutate(date_end = date + months(3))
+games %>% filter(is.na(gain) == T)  %>% select(gamename, date) %>% mutate(date_end = date + months(3))
 initial_release
 
 # Join Initial Releases back to games where gamename == gamename and initial_release$date is >= date and date + 3 months
@@ -118,32 +234,7 @@ games %>% filter(is.na(gain) == T, avg >= 1)  %>% ggplot(aes(x=factor(month, mon
 Capture Data from igdb Rest API
 https://www.igdb.com/advanced_search
 
-## Get Access Token from Twitch so we can use the IGDB API
-```{r}
 
-twitch_client_id = 'x3vdptwoaut0p9kq5k2x0my7n2v2j3'
-twitch_secret_key = ''
-
-# Get API Access token
-
-# POST(
-#   url = NULL,
-#   config = list(),
-#   ...,
-#   body = NULL,
-#   encode = c("multipart", "form", "json", "raw"),
-#   handle = NULL
-# )
-
-# Make a post request to get oauth access token
-url = str_c("https://id.twitch.tv/oauth2/token?client_id=", twitch_client_id, "&client_secret=", twitch_secret_key,"&grant_type=client_credentials", sep="")
-r = POST(url = url)
-# What we got back
-str(content(r))
-
-# What we need
-access_token = content(r)$access_token
-```
 
 ## Example IGDB API to get all the fields of metadata about a game
 All calls to the IGDB are posts.  
