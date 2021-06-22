@@ -1,5 +1,5 @@
 library(tidyverse)
-#library(neo4r) # not officlally supported.  This version only works with 3.5 and there is still an outstanding pull request for 4.0 from 2020.
+#library(neo4r) # not really supported.  This version only works with 3.5 and there is still an outstanding pull request for 4.0 from 2020.
 
 tweets <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-06-15/tweets.csv')
 
@@ -30,12 +30,12 @@ write_csv(mention_edges, "mention_edges.csv")
 
 # User Nodes
 users <-tweets %>% select(username, followers, location, lat, long, url) %>% mutate(username=str_to_lower(username)) %>% group_by(username) %>% summarise(followers=max(followers), location=max(location), lat=max(lat), long=max(long), url=max(url))
-mention_users <- mentions %>% select(child) %>% rename(username=child) %>% distinct
+mention_users <- mention_edges %>% select(label) %>% rename(username=label) %>% distinct
 all_user_nodes <- full_join(users, mention_users, by="username")
 all_user_nodes
 write_csv(all_user_nodes, "user_nodes.csv")
 
-# Hastage Edges (any #'s)
+# Hastag Edges (any #'s)
 # Hashtags can only contain letters, numbers, and underscores (_), no special characters
 hashtag_edges <- tweets$content %>% str_match_all("#[A-z0-9_]+") %>% make_pairs()
 write_csv(hashtag_edges, "hastag_edges.csv")
